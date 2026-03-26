@@ -46,15 +46,8 @@ COLUMNAS_CONSUMO = [
 # FUNCIONES BASE
 # =========================
 def inicializar_datos():
-    if "df_stock" not in st.session_state:
-        st.session_state.df_stock = pd.DataFrame([
-            {"Diametro": "Ø8", "Largo Barra (m)": 12.0, "Cantidad Barras": 0},
-            {"Diametro": "Ø10", "Largo Barra (m)": 12.0, "Cantidad Barras": 0},
-            {"Diametro": "Ø12", "Largo Barra (m)": 12.0, "Cantidad Barras": 0},
-            {"Diametro": "Ø16", "Largo Barra (m)": 12.0, "Cantidad Barras": 0},
-            {"Diametro": "Ø18", "Largo Barra (m)": 12.0, "Cantidad Barras": 0},
-            {"Diametro": "Ø22", "Largo Barra (m)": 12.0, "Cantidad Barras": 0},
-        ])
+   if "df_stock" not in st.session_state:
+    st.session_state.df_stock = pd.DataFrame(columns=COLUMNAS_STOCK)
 
     if "df_consumo" not in st.session_state:
         st.session_state.df_consumo = pd.DataFrame(columns=COLUMNAS_CONSUMO)
