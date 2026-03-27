@@ -234,7 +234,7 @@ def generar_excel(df_stock, df_consumo):
 
 
 # =========================
-# CUBICACIÓN ALEX
+# CUBICACIÓN EXCEL
 # =========================
 def preparar_cubicacion_alex(df):
     df = df.copy()
@@ -350,7 +350,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Registrar Consumo",
     "Stock",
     "Reporte",
-    "Consulta Cubicación Alex"
+    "Consulta Cubicación"
 ])
 
 # =========================
@@ -609,10 +609,10 @@ with tab4:
     )
 
 # =========================
-# TAB 5 - CONSULTA CUBICACIÓN ALEX
+# TAB 5 - CUBICACION
 # =========================
 with tab5:
-    st.subheader("Consulta Cubicación Alex")
+    st.subheader("Cubicacion")
 
     archivo_alex = st.file_uploader("Subir cubicación de Alex", type=["xlsx"], key="archivo_alex")
 
