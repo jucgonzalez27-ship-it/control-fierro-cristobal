@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from io import BytesIO
 from datetime import date
 
@@ -43,30 +44,46 @@ COLUMNAS_CONSUMO = [
 ]
 
 # =========================
-# FUNCIONES BASE
+# INICIALIZACIÓN
 # =========================
 def inicializar_datos():
-   if "df_stock" not in st.session_state:
-    st.session_state.df_stock = pd.DataFrame(columns=COLUMNAS_STOCK)
+    if "df_stock" not in st.session_state:
+        st.session_state.df_stock = pd.DataFrame(columns=COLUMNAS_STOCK)
 
     if "df_consumo" not in st.session_state:
         st.session_state.df_consumo = pd.DataFrame(columns=COLUMNAS_CONSUMO)
 
 
+# =========================
+# LIMPIEZA Y UTILIDADES
+# =========================
 def limpiar_stock(df_stock):
     df = df_stock.copy()
+
     if df.empty:
         return pd.DataFrame(columns=COLUMNAS_STOCK)
 
+    for col in COLUMNAS_STOCK:
+        if col not in df.columns:
+            df[col] = None
+
+    df["Diametro"] = df["Diametro"].astype(str).str.strip()
     df["Largo Barra (m)"] = pd.to_numeric(df["Largo Barra (m)"], errors="coerce").fillna(0)
     df["Cantidad Barras"] = pd.to_numeric(df["Cantidad Barras"], errors="coerce").fillna(0).astype(int)
+
+    df = df[df["Diametro"] != ""].copy()
     return df
 
 
 def limpiar_consumo(df_consumo):
     df = df_consumo.copy()
+
     if df.empty:
         return pd.DataFrame(columns=COLUMNAS_CONSUMO)
+
+    for col in COLUMNAS_CONSUMO:
+        if col not in df.columns:
+            df[col] = None
 
     numeric_cols = [
         "Largo Corte (m)",
@@ -77,6 +94,7 @@ def limpiar_consumo(df_consumo):
         "Despunte (m)",
         "Kg Estimados"
     ]
+
     for col in numeric_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
@@ -86,6 +104,7 @@ def limpiar_consumo(df_consumo):
 def obtener_opciones_largo_por_diametro(df_stock, diametro):
     df = limpiar_stock(df_stock)
     opciones = df[(df["Diametro"] == diametro) & (df["Cantidad Barras"] > 0)].copy()
+
     if opciones.empty:
         return []
 
@@ -107,26 +126,29 @@ def sugerir_largo_mas_conveniente(largos_disponibles, largo_corte):
 def calcular_consumo(largo_corte, cantidad_piezas, largo_barra, diametro):
     metros_teoricos = largo_corte * cantidad_piezas
 
-    if largo_barra <= 0:
-        barras_consumidas = 0
-        despunte = 0
+    if largo_barra <= 0 or largo_corte <= 0:
+        return {
+            "Metros Teoricos": 0,
+            "Barras Consumidas": 0,
+            "Despunte (m)": 0,
+            "Kg Estimados": 0
+        }
+
+    piezas_por_barra = int(largo_barra // largo_corte)
+
+    if piezas_por_barra <= 0:
+        barras_consumidas = cantidad_piezas
     else:
-        piezas_por_barra = int(largo_barra // largo_corte) if largo_corte > 0 else 0
+        barras_consumidas = -(-cantidad_piezas // piezas_por_barra)  # ceil division
 
-        if piezas_por_barra <= 0:
-            barras_consumidas = cantidad_piezas
-        else:
-            barras_consumidas = -(-cantidad_piezas // piezas_por_barra)  # ceil division
-
-        despunte = (barras_consumidas * largo_barra) - metros_teoricos
-
+    despunte = (barras_consumidas * largo_barra) - metros_teoricos
     kg_estimados = metros_teoricos * PESO_POR_METRO.get(diametro, 0)
 
     return {
         "Metros Teoricos": round(metros_teoricos, 2),
         "Barras Consumidas": int(barras_consumidas),
         "Despunte (m)": round(despunte, 2),
-        "Kg Estimados": round(kg_estimados, 2),
+        "Kg Estimados": round(kg_estimados, 2)
     }
 
 
@@ -138,12 +160,12 @@ def descontar_stock(df_stock, diametro, largo_barra_usada, barras_consumidas):
         (df["Largo Barra (m)"] == float(largo_barra_usada))
     )
 
-    indices = df[mask].index.tolist()
+    idxs = df[mask].index.tolist()
 
-    if not indices:
-        return df, False, "No se encontró esa combinación diámetro/largo en stock."
+    if not idxs:
+        return df, False, "No existe esa combinación de diámetro y largo en stock."
 
-    idx = indices[0]
+    idx = idxs[0]
     disponible = int(df.at[idx, "Cantidad Barras"])
 
     if disponible < barras_consumidas:
@@ -153,20 +175,19 @@ def descontar_stock(df_stock, diametro, largo_barra_usada, barras_consumidas):
     return df, True, "Stock descontado correctamente."
 
 
-def clasificar_semaforo_stock(df_stock, df_consumo):
-    df_s = limpiar_stock(df_stock)
-    df_c = limpiar_consumo(df_consumo)
+def clasificar_semaforo_stock(df_stock):
+    df = limpiar_stock(df_stock)
 
-    stock_total_barras = df_s["Cantidad Barras"].sum() if not df_s.empty else 0
+    if df.empty:
+        return "🔴", "Sin stock cargado"
 
-    if stock_total_barras <= 0:
+    total_barras = int(df["Cantidad Barras"].sum())
+
+    if total_barras <= 0:
         return "🔴", "Falta stock"
 
-    if df_s.empty:
-        return "🔴", "Sin stock"
-
-    stock_por_diam = df_s.groupby("Diametro")["Cantidad Barras"].sum().reset_index()
-    criticos = stock_por_diam[stock_por_diam["Cantidad Barras"] <= 2]
+    resumen = df.groupby("Diametro")["Cantidad Barras"].sum().reset_index()
+    criticos = resumen[resumen["Cantidad Barras"] <= 2]
 
     if not criticos.empty:
         return "🟡", "Stock ajustado"
@@ -175,23 +196,145 @@ def clasificar_semaforo_stock(df_stock, df_consumo):
 
 
 def resumen_diametros_criticos(df_stock):
-    df_s = limpiar_stock(df_stock)
-    if df_s.empty:
+    df = limpiar_stock(df_stock)
+
+    if df.empty:
         return pd.DataFrame(columns=["Diametro", "Cantidad Barras"])
 
-    resumen = df_s.groupby("Diametro")["Cantidad Barras"].sum().reset_index()
-    resumen = resumen.sort_values(by="Cantidad Barras", ascending=True)
+    resumen = (
+        df.groupby("Diametro", dropna=False)["Cantidad Barras"]
+        .sum()
+        .reset_index()
+        .sort_values(by="Cantidad Barras", ascending=True)
+    )
     return resumen
 
 
-def generar_excel(df_stock, df_consumo, df_resumen_stock):
+def generar_excel(df_stock, df_consumo):
     output = BytesIO()
+
+    df_stock_limpio = limpiar_stock(df_stock)
+    df_consumo_limpio = limpiar_consumo(df_consumo)
+
+    resumen_stock = (
+        df_stock_limpio.groupby(["Diametro", "Largo Barra (m)"], dropna=False)["Cantidad Barras"]
+        .sum()
+        .reset_index()
+        .sort_values(by=["Diametro", "Largo Barra (m)"])
+        if not df_stock_limpio.empty else pd.DataFrame(columns=["Diametro", "Largo Barra (m)", "Cantidad Barras"])
+    )
+
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        limpiar_stock(df_stock).to_excel(writer, index=False, sheet_name="Stock")
-        limpiar_consumo(df_consumo).to_excel(writer, index=False, sheet_name="Consumos")
-        df_resumen_stock.to_excel(writer, index=False, sheet_name="Resumen Stock")
+        df_stock_limpio.to_excel(writer, index=False, sheet_name="Stock")
+        df_consumo_limpio.to_excel(writer, index=False, sheet_name="Consumos")
+        resumen_stock.to_excel(writer, index=False, sheet_name="Resumen Stock")
+
     output.seek(0)
     return output
+
+
+# =========================
+# CUBICACIÓN ALEX
+# =========================
+def preparar_cubicacion_alex(df):
+    df = df.copy()
+
+    cols_necesarias = [
+        "Estructura", "Eje", "Elemento", "Tipo", "Detalle",
+        "f (mm)", "Cant.", "L Unit (m)", "Peso (kg)",
+        "A", "B", "C", "D", "E", "F", "G"
+    ]
+
+    for c in cols_necesarias:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    df["Cant."] = pd.to_numeric(df["Cant."], errors="coerce").fillna(0)
+    df["L Unit (m)"] = pd.to_numeric(df["L Unit (m)"], errors="coerce").fillna(0)
+    df["Peso (kg)"] = pd.to_numeric(df["Peso (kg)"], errors="coerce").fillna(0)
+    df["f (mm)"] = pd.to_numeric(df["f (mm)"], errors="coerce").fillna(0)
+
+    # normalización texto
+    for c in ["Estructura", "Eje", "Elemento", "Tipo", "Detalle"]:
+        df[c] = df[c].astype(str).str.strip()
+
+    # Firma geométrica individual
+    cols_dim = ["A", "B", "C", "D", "E", "F", "G"]
+    df["FirmaBarra"] = (
+        df["Detalle"].astype(str).str.strip() + "|" +
+        df["f (mm)"].astype(str) + "|" +
+        df["L Unit (m)"].astype(str) + "|" +
+        df[cols_dim].astype(str).agg("|".join, axis=1)
+    )
+
+    return df
+
+
+def distancia_jaccard(set1, set2):
+    if not set1 and not set2:
+        return 0
+    inter = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+    if union == 0:
+        return 0
+    return 1 - inter / union
+
+
+def detectar_grupos(df_filtrado, ventana=4, umbral=0.35):
+    """
+    Heurística inicial:
+    - recorre en orden
+    - mira la mezcla de firmas recientes
+    - si cambia bastante, crea un grupo nuevo
+    """
+    df = df_filtrado.copy().reset_index(drop=True)
+
+    if df.empty:
+        df["Grupo"] = []
+        return df
+
+    firmas = df["FirmaBarra"].tolist()
+    grupo_ids = []
+    grupo_actual = 1
+    ventana_firmas = []
+
+    for i, firma in enumerate(firmas):
+        if i == 0:
+            grupo_ids.append(grupo_actual)
+            ventana_firmas = [firma]
+            continue
+
+        prev_set = set(ventana_firmas[-ventana:])
+        curr_set = set(ventana_firmas[-ventana:] + [firma])
+        d = distancia_jaccard(prev_set, curr_set)
+
+        if d > umbral:
+            grupo_actual += 1
+            ventana_firmas = [firma]
+        else:
+            ventana_firmas.append(firma)
+
+        grupo_ids.append(grupo_actual)
+
+    df["Grupo"] = grupo_ids
+    return df
+
+
+def resumir_partida_por_grupo(df_filtrado):
+    if df_filtrado.empty:
+        return pd.DataFrame()
+
+    resumen = (
+        df_filtrado
+        .groupby(["Grupo", "f (mm)", "L Unit (m)", "Detalle"], dropna=False)
+        .agg(
+            Cantidad=("Cant.", "sum"),
+            Peso_Total=("Peso (kg)", "sum")
+        )
+        .reset_index()
+        .sort_values(by=["Grupo", "f (mm)", "L Unit (m)", "Detalle"])
+    )
+    return resumen
 
 
 # =========================
@@ -200,13 +343,14 @@ def generar_excel(df_stock, df_consumo, df_resumen_stock):
 inicializar_datos()
 
 st.title("🔩 Control Fierro Terreno")
-st.caption("Registro de consumo real + stock + semáforos")
+st.caption("Consumo real + stock + consulta de cubicación")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Inicio",
     "Registrar Consumo",
     "Stock",
-    "Reporte"
+    "Reporte",
+    "Consulta Cubicación Alex"
 ])
 
 # =========================
@@ -219,26 +363,27 @@ with tab1:
     df_consumo = limpiar_consumo(st.session_state.df_consumo)
 
     hoy = str(date.today())
-
     consumo_hoy = df_consumo[df_consumo["Fecha"].astype(str) == hoy] if not df_consumo.empty else pd.DataFrame()
-    barras_hoy = int(consumo_hoy["Barras Consumidas"].sum()) if not consumo_hoy.empty else 0
-    kg_hoy = round(consumo_hoy["Kg Estimados"].sum(), 2) if not consumo_hoy.empty else 0
-    metros_hoy = round(consumo_hoy["Metros Teoricos"].sum(), 2) if not consumo_hoy.empty else 0
 
-    emoji, texto_semaforo = clasificar_semaforo_stock(df_stock, df_consumo)
+    kg_hoy = round(consumo_hoy["Kg Estimados"].sum(), 2) if not consumo_hoy.empty else 0
+    barras_hoy = int(consumo_hoy["Barras Consumidas"].sum()) if not consumo_hoy.empty else 0
+    metros_hoy = round(consumo_hoy["Metros Teoricos"].sum(), 2) if not consumo_hoy.empty else 0
+    registros_hoy = len(consumo_hoy)
+
+    emoji, texto = clasificar_semaforo_stock(df_stock)
 
     if emoji == "🟢":
-        st.success(f"{emoji} SEMÁFORO GENERAL: {texto_semaforo}")
+        st.success(f"{emoji} SEMÁFORO GENERAL: {texto}")
     elif emoji == "🟡":
-        st.warning(f"{emoji} SEMÁFORO GENERAL: {texto_semaforo}")
+        st.warning(f"{emoji} SEMÁFORO GENERAL: {texto}")
     else:
-        st.error(f"{emoji} SEMÁFORO GENERAL: {texto_semaforo}")
+        st.error(f"{emoji} SEMÁFORO GENERAL: {texto}")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Consumo del día (kg)", kg_hoy)
     c2.metric("Barras consumidas hoy", barras_hoy)
     c3.metric("Metros del día", metros_hoy)
-    c4.metric("Registros de hoy", len(consumo_hoy))
+    c4.metric("Registros de hoy", registros_hoy)
 
     st.markdown("### Diámetros críticos")
     df_crit = resumen_diametros_criticos(df_stock)
@@ -318,8 +463,14 @@ with tab2:
     r4.metric("Kg estimados", resultados["Kg Estimados"])
 
     if st.button("➕ Guardar consumo", use_container_width=True):
-        if largo_barra_usada <= 0:
+        if not nivel.strip():
+            st.error("Debes indicar el nivel.")
+        elif not eje_numeral.strip() and not eje_literal.strip():
+            st.error("Debes indicar al menos un eje.")
+        elif largo_barra_usada <= 0:
             st.error("No se puede guardar sin stock disponible.")
+        elif largo_corte > largo_barra_usada:
+            st.error("El largo de corte no puede ser mayor al largo de barra usado.")
         else:
             df_stock_actualizado, ok, mensaje = descontar_stock(
                 st.session_state.df_stock,
@@ -361,6 +512,9 @@ with tab2:
 # =========================
 with tab3:
     st.subheader("Stock disponible")
+
+    if st.session_state.df_stock.empty:
+        st.warning("Aún no has cargado stock. Agrega el stock real según diámetro, largo y cantidad.")
 
     st.info("Aquí defines el stock real por diámetro y largo de barra.")
 
@@ -418,15 +572,13 @@ with tab4:
     df_stock = limpiar_stock(st.session_state.df_stock)
     df_consumo = limpiar_consumo(st.session_state.df_consumo)
 
-    if df_stock.empty:
-        resumen_stock = pd.DataFrame(columns=["Diametro", "Cantidad Barras"])
-    else:
-        resumen_stock = (
-            df_stock.groupby(["Diametro", "Largo Barra (m)"], dropna=False)["Cantidad Barras"]
-            .sum()
-            .reset_index()
-            .sort_values(by=["Diametro", "Largo Barra (m)"])
-        )
+    resumen_stock = (
+        df_stock.groupby(["Diametro", "Largo Barra (m)"], dropna=False)["Cantidad Barras"]
+        .sum()
+        .reset_index()
+        .sort_values(by=["Diametro", "Largo Barra (m)"])
+        if not df_stock.empty else pd.DataFrame(columns=["Diametro", "Largo Barra (m)", "Cantidad Barras"])
+    )
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total registros", len(df_consumo))
@@ -446,7 +598,7 @@ with tab4:
     else:
         st.info("Aún no hay stock cargado.")
 
-    excel_file = generar_excel(df_stock, df_consumo, resumen_stock)
+    excel_file = generar_excel(df_stock, df_consumo)
 
     st.download_button(
         label="📥 Descargar Excel",
@@ -456,5 +608,83 @@ with tab4:
         use_container_width=True
     )
 
+# =========================
+# TAB 5 - CONSULTA CUBICACIÓN ALEX
+# =========================
+with tab5:
+    st.subheader("Consulta Cubicación Alex")
+
+    archivo_alex = st.file_uploader("Subir cubicación de Alex", type=["xlsx"], key="archivo_alex")
+
+    if archivo_alex is not None:
+        try:
+            df_raw = pd.read_excel(archivo_alex)
+            df_alex = preparar_cubicacion_alex(df_raw)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                estructura_sel = st.selectbox(
+                    "Estructura",
+                    sorted(df_alex["Estructura"].dropna().unique().tolist())
+                )
+                eje_sel = st.selectbox(
+                    "Eje",
+                    sorted(df_alex["Eje"].dropna().unique().tolist())
+                )
+
+            with col2:
+                elemento_sel = st.selectbox(
+                    "Elemento",
+                    sorted(df_alex["Elemento"].dropna().unique().tolist())
+                )
+                tipo_sel = st.selectbox(
+                    "Tipo",
+                    sorted(df_alex["Tipo"].dropna().unique().tolist())
+                )
+
+            col3, col4 = st.columns(2)
+            with col3:
+                ventana = st.slider("Ventana de detección", min_value=2, max_value=8, value=4, step=1)
+            with col4:
+                umbral = st.slider("Sensibilidad de agrupación", min_value=0.10, max_value=0.90, value=0.35, step=0.05)
+
+            df_filtrado = df_alex[
+                (df_alex["Estructura"] == estructura_sel) &
+                (df_alex["Eje"] == eje_sel) &
+                (df_alex["Elemento"] == elemento_sel) &
+                (df_alex["Tipo"] == tipo_sel)
+            ].copy()
+
+            st.markdown("### Filtrado")
+            st.write(f"Filas encontradas: {len(df_filtrado)}")
+
+            if not df_filtrado.empty:
+                df_grupos = detectar_grupos(df_filtrado, ventana=ventana, umbral=umbral)
+                df_resumen = resumir_partida_por_grupo(df_grupos)
+
+                grupos_detectados = sorted(df_grupos["Grupo"].unique().tolist())
+
+                c1, c2 = st.columns(2)
+                c1.metric("Grupos detectados", len(grupos_detectados))
+                c2.metric("Filas filtradas", len(df_grupos))
+
+                grupo_sel = st.selectbox("Selecciona grupo detectado", grupos_detectados)
+
+                st.markdown("### Resumen del grupo")
+                resumen_grupo = df_resumen[df_resumen["Grupo"] == grupo_sel].copy()
+                st.dataframe(resumen_grupo, use_container_width=True, hide_index=True)
+
+                st.markdown("### Detalle del grupo")
+                detalle_grupo = df_grupos[df_grupos["Grupo"] == grupo_sel].copy()
+                st.dataframe(detalle_grupo, use_container_width=True, hide_index=True)
+
+                st.markdown("### Vista completa con grupos")
+                st.dataframe(df_grupos, use_container_width=True, hide_index=True)
+            else:
+                st.warning("No hay filas para esa combinación de estructura, eje, elemento y tipo.")
+
+        except Exception as e:
+            st.error(f"Error al leer o procesar el archivo: {e}")
+
 st.markdown("---")
-st.caption("Versión enfocada en consumo real de terreno, stock y semáforos.")
+st.caption("Versión integrada: consumo real, stock y consulta estratégica de cubicación.")
