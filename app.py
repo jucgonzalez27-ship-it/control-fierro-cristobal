@@ -4,7 +4,7 @@ import numpy as np
 from io import BytesIO
 from datetime import date
 
-st.set_page_config(page_title="Control Fierro Terreno", layout="wide")
+st.set_page_config(page_title="CONTROL FIERRO CRISTOBAL", layout="wide")
 
 # =========================
 # CONFIG
