@@ -347,10 +347,10 @@ st.caption("Consumo real + stock + consulta de cubicación")
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Inicio",
-    "Registrar Consumo",
+    "Consumo",
     "Stock",
     "Reporte",
-    "Consulta Cubicación"
+    "Cubicación"
 ])
 
 # =========================
